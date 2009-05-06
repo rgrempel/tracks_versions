@@ -1,0 +1,149 @@
+TracksVersions
+==============
+
+This is essentially an implementation of someting like what acts_as_versioned_association
+does. My difficulty with acts_as_versioned_association is that I found it hard to understand
+what it intended to do at a strategic level. That made it difficult to understand whether the
+implementation did what I wanted to do. So I thought I would try to write my own as a kind of
+experiment. That might make me understand whether acts_as_versioned_association did what I want
+or not.
+
+I thought I would build on acts_as_versioned (as does acts_as_versioned_association). In theory,
+acts_as_versioned stores a lot of redundant information. For each "save", it moves the entire
+record to the _versions table, even if many fields are the same. However, doing things that way
+is certainly easier to work with afterwards than many alternatives, so it seems a decent way to
+start.
+
+Note that acts_as_versioned_association does not distinguish between three logical types of history.
+One type is simple correction -- the data was wrong and we fix it, but we want to see what we did
+(in case it is the new data that is wrong). The second type is "continuous improvement" (e.g. a wiki),
+where the original data isn't necessarily wrong, but we want to update it over time. The third type is
+where the data is inherently time-based -- think, for instance, of a name change, where we need to keep
+track of what name was valid at a given point in time. It seems to me that acts_as_versioned works well
+for the first two cases, but that the third case cannot be dealt with generically. In the third case, the
+time-based data is actually part of the application logic per se, and probably needs to be dealt with in
+a custom way, rather than with a plugin.
+
+BelongsTo
+=========
+
+Now, at the database level, acts_as_versioned will version _id fields by itself, in the sense
+that if you change the _id field, it will save a version. Suppose, for instance, a people table has
+a company_id. In that case, changing the company_id change the company the person belongs to, and
+that is versioned. Changing the company record (its name, for instance) is not a change to the
+person, so it needn't trigger any particular logic in the person's version history. (For instance, when
+referencing previous versions of the person, we don't conceptually care about changes to the company name).
+
+There is, however, one puzzle here. What if the company is deleted? This would trigger some application logic
+in the current people table (that is, the company_id field would be set to NULL, or the deletion might simply
+fail). Now, the previous versions will still point to the company -- which no longer exists. This could be
+handled with application logic -- given the company_id, we can look at the company_versions table to 
+"resurrect" the company if we want to. But there would be nothing in the people history to tell us
+which version corresponds to any particular revision of the person. Of course, we might not care -- that is,
+conceptually we may not need to know. But if we did need to know, how could we find out?
+
+If we keep track of updated_at, then we can look at the updated_at for the person, and look at the company
+history to determine what version of the company record corresponded at that moment. (Essentially, we would
+be looking for the first record with an updated_at before the person record's).
+
+Alternatively, when saving the person record, we could rewrite the company_id to refer to the current version
+in the company_versions table, rather than the "main" company record. This is, if I understand it correctly,
+what acts_as_versioned_association does, and it seems conceptually sound to me. What it does is essentially
+reconceptualize what company_id means in the context of the versioned table. In the context of the versioned
+table, it does not point to the current company record, but rather to a specific revision in the _versions
+table. And we don't lose any information in this rewriting, because we can still get the company_id from the
+company version record.
+
+This does have an implication for revert_to, though -- we would need to perform the reverse transformation
+to company_id on revert, so that it points to the actual company table, rather than the revision. The other
+question on revert to is whether to also revert the company info. Of course, it wouldn't make sense in 
+this case, because they aren't conceptually coupled in that way. But in some cases it might.
+
+There could, of course, be multiple changes in the company record for each change in the person record.
+With an updated_at field, one could synthesize this -- that is, one could reconstruct what changes
+happened in company between revisions of person. Alternatively, one could actually trigger a new version
+of person everytime company is saved. That way, the new version of person would get its company_id field
+rewritten to correspond to the specific version of company. (This is, as I understand it, what
+acts_as_versioned_association does). 
+
+Now, this should work, but it does exaggerate the ineffeciency of acts_as_versioned in a way. The person
+record would be re-versioned completely in order to change only the company_id. And given that there
+may be many people, the company record change would trigger a lot of re-saving of people.
+
+What, then, are the key gaps that versioning associations could fill, that act_as_versioned doesn't do
+by itself?
+
+-- We want to know, for any given past version, what the state of its associations were at that time
+-- We want to consider a change in the association to mean a change in the version of this side
+
+If we insisted on updated_at fields on both sides, how could we deal with this?
+
+-- We could reconceptualize versions in terms of points in time, rather than version numbers.
+
+Now, we would need a way to generate lists of the relevant points in time. Having done that, though,
+it's pretty simple.
+
+-- We need a way to "unify" the version history.
+
+Consider person x, relaed to company y. Essentially, we want:
+
+  -- a list of updated_at for person x
+  -- a list of updated_at for company y
+
+The combined list then reflects the combined version history. (We could implement this via a UNION query
+to the database, or by aggregating the results of multiple queries at the application level).
+
+We then need a way to represent the previous combined state at any given point in time. Now, it seems
+to me that the key advantage of the extra saves and the rewriting that acts_as_versioned_association
+does is that it makes it easy to represent that previous combined state in an ActiveRecord-friendly
+idiom, so that we can pass the versioned model back to a view template (for instance) and more or less
+automatically get the correct behaviours. So we would want to keep that.
+
+Here is one strategy.
+
+In the versioned model (on the belongs_to side) we add an attr_accessor for :as_of_date. We use this
+in rewriting the associations, in the following way:
+
+-- the association is to the versioned table of the association, rather than the regular
+-- the association would, by itelf, return multiple versions, so we limit them to the one whose 
+   :updated_at is less than :as_of_date (the most recent of those)
+
+I think this should work, and it requires zero extra saves, and no rewriting on save ...
+
+HasOne
+======
+
+I think has_one is probably just the mirror image of belongs_to here. 
+
+-- rewrite the association so that it looks to the versioned table
+-- would ordinarily find a bunch -- limit based on :as_of_date
+
+But I speek too soon! The difficulty is the deletion of the other side.
+
+HasMany
+=======
+
+Now, I probably won't think through has_and_belongs_to_many, becuase I just don't use that -- I always
+use join models instead. Perhaps once I've got has_many figured out it will be relatively simple to
+implement has_and_belongs_to_many as well (since habtm is essentially a composite).
+
+In theory, the example I used above of person <-> company is has_many on the company side. So, what is
+our task? Essentially, we want to represent, at a particular point in time, which people were associated
+with the company and what their state was then.
+
+But I'll actually use a more realistic example (given what I'm workig on) which is Taggable and Tagging.
+Essentially, tagging has a taggable_id and tag_id. What I want to know is, at some point in time,
+what taggings had a taggable_id pointing to the taggable. Essentially, I want to consider the application 
+of a tag as part of the version history of the taggable. (Note that I don't care about changes to the tag
+per se, e.g. the tag name, as I'm presuming identity. But I could care in other contexts, which is,
+in a sense, a has_many :through question).
+
+Given the presence of updated_at and :as_of_date, what can I infer? Now, I can find all the past revisions 
+which were at one time related. But were they related at the crucial moment? For that, I need
+valid_until, don't I?
+
+If I have updated_at and valid_until, then I think I am set!
+
+
+
+
