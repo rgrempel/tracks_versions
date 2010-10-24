@@ -1,0 +1,29 @@
+readme_v1:
+  id: 1
+  document_id: 1
+  title: README
+  body: this is a reade guide
+  version_from: <%= days_ago 2 %>
+  version_to: <%= days_ago 1 %>
+  author_id: 1
+  revisor_id: 1
+  client_id: 1
+
+readme_v2:
+  id: 2
+  document_id: 1
+  title: README
+  body: this is a readme guide
+  version_from: <%= days_ago 1 %>
+  author_id: 1
+  revisor_id: 1
+  client_id: 1
+
+another_doc_v1:
+  id: 3
+  document_id: 2
+  title: something
+  body: something highly interesting
+  version_from: <%= days_ago 1 %>
+  author_id: 1
+  revisor_id: 1

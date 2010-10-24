@@ -1,6 +1,0 @@
-current_version:
-  id: 1
-  first_name: Current
-  last_name: User
-  version_from: <% days_ago 1 %>
-  person_id: 1
